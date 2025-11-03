@@ -2,7 +2,7 @@
 
 A retro-style Snake game built with Rust and Macroquad, featuring a Matrix-inspired aesthetic with procedural map generation and dynamic gameplay.
 
-![Game Over Screen](img/game_over.png)
+![Game Over Screen](img/game_over2.png)
 
 ## Features
 
