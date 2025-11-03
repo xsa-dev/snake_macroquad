@@ -185,6 +185,7 @@ struct SnakeGame {
     move_interval: f32,
     eat_sound: Sound,
     die_sound: Sound,
+    volume: f32,
 }
 
 impl SnakeGame {
@@ -204,9 +205,10 @@ impl SnakeGame {
             move_interval: self.move_interval,
             eat_sound: self.eat_sound.clone(),
             die_sound: self.die_sound.clone(),
+            volume: self.volume,
         }
     }
-    fn new(map: Map, move_interval: f32, eat_sound: Sound, die_sound: Sound) -> Self {
+    fn new(map: Map, move_interval: f32, eat_sound: Sound, die_sound: Sound, volume: f32) -> Self {
         let start = Cell { x: GRID_WIDTH / 2, y: GRID_HEIGHT / 2 };
         let initial_snake = vec![
             start,
@@ -231,6 +233,7 @@ impl SnakeGame {
             move_interval,
             eat_sound,
             die_sound,
+            volume: volume.clamp(0.0, 1.0),
         }
     }
 
@@ -286,12 +289,12 @@ impl SnakeGame {
         // Bounds and wall collision (no wrap)
         if tentative.x < 0 || tentative.y < 0 || tentative.x >= GRID_WIDTH || tentative.y >= GRID_HEIGHT {
             self.alive = false;
-            audio::play_sound(&self.die_sound, PlaySoundParams { looped: false, volume: 0.6 });
+            audio::play_sound(&self.die_sound, PlaySoundParams { looped: false, volume: 0.6 * self.volume });
             return;
         }
         if self.map.is_wall(tentative) {
             self.alive = false;
-            audio::play_sound(&self.die_sound, PlaySoundParams { looped: false, volume: 0.6 });
+            audio::play_sound(&self.die_sound, PlaySoundParams { looped: false, volume: 0.6 * self.volume });
             return;
         }
         let new_head = tentative;
@@ -299,7 +302,7 @@ impl SnakeGame {
         // Self collision
         if self.snake.iter().any(|c| *c == new_head) {
             self.alive = false;
-            audio::play_sound(&self.die_sound, PlaySoundParams { looped: false, volume: 0.6 });
+            audio::play_sound(&self.die_sound, PlaySoundParams { looped: false, volume: 0.6 * self.volume });
             return;
         }
 
@@ -312,7 +315,7 @@ impl SnakeGame {
             self.score += 1;
             self.food = Self::spawn_food(&self.snake, &self.map);
             self.food_char = random_matrix_char();
-            audio::play_sound(&self.eat_sound, PlaySoundParams { looped: false, volume: 0.35 });
+            audio::play_sound(&self.eat_sound, PlaySoundParams { looped: false, volume: 0.35 * self.volume });
         }
 
         if !self.grow {
@@ -362,18 +365,47 @@ struct LobbyState {
     seed: u64,
     wall_density: f32,
     move_interval: f32,
+    selected: i32,
+    preview_map: Map,
+    preview_pos: Cell,
+    preview_dir: Direction,
+    preview_last_move: f32,
 }
 
 impl LobbyState {
     fn new() -> Self {
         let s = load_save();
         let time_seed = (get_time() as f64 * 1_000_000.0) as u64;
-        Self { seed: if s.last_seed == 0 { time_seed } else { s.last_seed }, wall_density: if s.last_wall_density == 0.0 { 0.10 } else { s.last_wall_density }, move_interval: if s.last_move_interval == 0.0 { DEFAULT_MOVE_INTERVAL } else { s.last_move_interval } }
+        let seed = if s.last_seed == 0 { time_seed } else { s.last_seed };
+        let wall_density = if s.last_wall_density == 0.0 { 0.10 } else { s.last_wall_density };
+        let move_interval = if s.last_move_interval == 0.0 {
+            DEFAULT_MOVE_INTERVAL
+        } else {
+            s.last_move_interval
+        };
+        let preview_map = Map::generate(seed, wall_density);
+        let preview_pos = Cell { x: GRID_WIDTH / 2, y: GRID_HEIGHT / 2 };
+        let preview_dir = Direction::Right;
+        Self {
+            seed,
+            wall_density,
+            move_interval,
+            selected: 0,
+            preview_map,
+            preview_pos,
+            preview_dir,
+            preview_last_move: 0.0,
+        }
     }
+}
+
+struct SettingsState {
+    sound_volume: f32,
 }
 
 enum Screen {
     Lobby(LobbyState),
+    Settings(SettingsState),
     Playing(SnakeGame),
     GameOver(SnakeGame),
 }
@@ -385,6 +417,7 @@ struct SaveData {
     last_seed: u64,
     last_wall_density: f32,
     last_move_interval: f32,
+    sound_volume: f32,
 }
 
 fn save_path() -> String { "snake_save.json".to_string() }
@@ -428,10 +461,17 @@ fn draw_matrix_rain(drops: &mut Vec<Drop>, dt: f32) {
     }
 }
 
-#[macroquad::main("Snake - Macroquad")]
+fn window_conf() -> Conf {
+    Conf {
+        window_title: "Snake - Macroquad".to_owned(),
+        fullscreen: true,
+        high_dpi: true,
+        ..Default::default()
+    }
+}
+
+#[macroquad::main(window_conf)]
 async fn main() {
-    request_new_screen_size(SCREEN_WIDTH as f32, SCREEN_HEIGHT as f32);
-    next_frame().await;
 
     // Sounds (simple generated beeps)
     let eat_bytes = generate_wav_sine(880.0, 0.08, 0.6);
@@ -439,6 +479,10 @@ async fn main() {
     let eat_sound = load_sound_from_bytes(&eat_bytes).await.unwrap();
     let die_sound = load_sound_from_bytes(&die_bytes).await.unwrap();
 
+    let mut sound_volume = {
+        let s = load_save();
+        if s.sound_volume == 0.0 { 1.0 } else { s.sound_volume }
+    };
     let mut screen = Screen::Lobby(LobbyState::new());
     let mut drops: Vec<Drop> = (0..(GRID_WIDTH / 2)).map(|i| Drop { x: (i * 2) % GRID_WIDTH, y: macroquad::rand::gen_range(0, GRID_HEIGHT), speed: macroquad::rand::gen_range(6.0, 18.0) }).collect();
     let mut last_time = get_time() as f32;
@@ -448,41 +492,183 @@ async fn main() {
         let dt = (now - last_time).max(0.0);
         last_time = now;
 
+        if is_key_pressed(KeyCode::Q) { break; }
+
         clear_background(BLACK);
         draw_matrix_rain(&mut drops, dt);
+        let mut next_screen: Option<Screen> = None;
         match &mut screen {
             Screen::Lobby(lobby) => {
-                draw_text("SNAKE", 96.0, 64.0, 40.0, MATRIX_HEAD);
-                draw_text("Enter: Start", 80.0, 100.0, 20.0, WHITE);
-                draw_text("R: Reseed", 80.0, 120.0, 20.0, GRAY);
-                draw_text("- / + : Wall density", 80.0, 140.0, 20.0, GRAY);
-                draw_text("[ / ] : Speed", 80.0, 160.0, 20.0, GRAY);
-                let best = load_save().best_score;
-                draw_text(&format!("Best: {}", best), 8.0, 200.0, 20.0, MATRIX_BODY);
+                let sw = screen_width();
+                let sh = screen_height();
 
-                draw_text(
-                    &format!(
-                        "Seed: {}  Density: {:.0}%  Speed: {:.0}ms",
-                        lobby.seed,
-                        lobby.wall_density * 100.0,
-                        lobby.move_interval * 1000.0
-                    ),
-                    8.0,
-                    220.0,
-                    18.0,
-                    LIGHTGRAY,
+                let title = "SNAKE";
+                let t = measure_text(title, None, 40, 1.0);
+                let mut y = sh * 0.25;
+                draw_text(title, (sw - t.width) * 0.5, y, 40.0, MATRIX_HEAD);
+                y += 56.0;
+
+                let items = [
+                    "Enter: Start",
+                    "R: Reseed",
+                    "- / + : Wall density",
+                    "[ / ] : Speed",
+                    "Q: Quit",
+                ];
+                for (i, text) in items.iter().enumerate() {
+                    let color = if lobby.selected == i as i32 { WHITE } else { GRAY };
+                    let m = measure_text(text, None, 20, 1.0);
+                    draw_text(text, (sw - m.width) * 0.5, y, 20.0, color);
+                    y += 24.0;
+                }
+
+                let sline = "S: Settings";
+                let ms = measure_text(sline, None, 20, 1.0);
+                draw_text(sline, (sw - ms.width) * 0.5, y, 20.0, GRAY);
+                y += 24.0;
+
+                let best = load_save().best_score;
+                let best_s = format!("Best: {}", best);
+                let mb = measure_text(&best_s, None, 20, 1.0);
+                draw_text(&best_s, (sw - mb.width) * 0.5, sh - 64.0, 20.0, MATRIX_BODY);
+
+                let params = format!(
+                    "Seed: {}  Density: {:.0}%  Speed: {:.0}ms",
+                    lobby.seed,
+                    lobby.wall_density * 100.0,
+                    lobby.move_interval * 1000.0
+                );
+                let mp = measure_text(&params, None, 18, 1.0);
+                draw_text(&params, (sw - mp.width) * 0.5, sh - 40.0, 18.0, LIGHTGRAY);
+
+                // Preview panel that reacts to difficulty
+                // Target 85% of screen, maintain grid aspect and center
+                let target_w = sw * 0.85;
+                let target_h = sh * 0.85;
+                let scale = (target_w / GRID_WIDTH as f32)
+                    .min(target_h / GRID_HEIGHT as f32);
+                let tile_w = scale;
+                let tile_h = scale;
+                let pw = tile_w * GRID_WIDTH as f32;
+                let ph = tile_h * GRID_HEIGHT as f32;
+                let off_x = (sw - pw) * 0.5;
+                let off_y = (sh - ph) * 0.5;
+
+                // Draw preview map walls
+                for c in &lobby.preview_map.walls {
+                    let ch = matrix_char_for_cell(*c);
+                    draw_glyph_at_cell_scaled(
+                        ch,
+                        *c,
+                        Color::new(MATRIX_WALL.r, MATRIX_WALL.g, MATRIX_WALL.b, 0.8),
+                        tile_w,
+                        tile_h,
+                        off_x,
+                        off_y,
+                    );
+                }
+
+                // Advance preview head based on selected speed
+                let now = get_time() as f32;
+                if now - lobby.preview_last_move >= lobby.move_interval.max(0.05) {
+                    lobby.preview_last_move = now;
+                    // Try to move; if blocked, rotate direction
+                    let head = lobby.preview_pos;
+                    let mut try_dir = lobby.preview_dir;
+                    let mut moved = false;
+                    for _ in 0..4 {
+                        let tentative = match try_dir {
+                            Direction::Up => Cell { x: head.x, y: head.y - 1 },
+                            Direction::Down => Cell { x: head.x, y: head.y + 1 },
+                            Direction::Left => Cell { x: head.x - 1, y: head.y },
+                            Direction::Right => Cell { x: head.x + 1, y: head.y },
+                        };
+                        let in_bounds = tentative.x > 0
+                            && tentative.y > 0
+                            && tentative.x < GRID_WIDTH - 1
+                            && tentative.y < GRID_HEIGHT - 1;
+                        if in_bounds && !lobby.preview_map.is_wall(tentative) {
+                            lobby.preview_pos = tentative;
+                            lobby.preview_dir = try_dir;
+                            moved = true;
+                            break;
+                        }
+                        // rotate direction clockwise
+                        try_dir = match try_dir {
+                            Direction::Up => Direction::Right,
+                            Direction::Right => Direction::Down,
+                            Direction::Down => Direction::Left,
+                            Direction::Left => Direction::Up,
+                        };
+                    }
+                    if !moved {
+                        // regenerate spot near center to avoid stalling
+                        lobby.preview_pos = Cell { x: GRID_WIDTH / 2, y: GRID_HEIGHT / 2 };
+                        lobby.preview_dir = Direction::Right;
+                    }
+                }
+
+                // Draw preview head glyph; color shifts with speed
+                let speed_factor = (DEFAULT_MOVE_INTERVAL / lobby.move_interval)
+                    .clamp(0.5, 4.0);
+                let head_color = Color::new(
+                    (0.15 * speed_factor).min(1.0),
+                    (0.9 * (1.0 / speed_factor)).min(1.0),
+                    0.2,
+                    1.0,
+                );
+                draw_glyph_at_cell_scaled(
+                    random_matrix_char(),
+                    lobby.preview_pos,
+                    head_color,
+                    tile_w,
+                    tile_h,
+                    off_x,
+                    off_y,
                 );
 
-                // Controls
+                if is_key_pressed(KeyCode::Up) {
+                    lobby.selected = if lobby.selected <= 0 { 4 } else { lobby.selected - 1 };
+                }
+                if is_key_pressed(KeyCode::Down) {
+                    lobby.selected = if lobby.selected >= 4 { 0 } else { lobby.selected + 1 };
+                }
+
+                if is_key_pressed(KeyCode::Left) {
+                    match lobby.selected {
+                        2 => {
+                            lobby.wall_density = (lobby.wall_density - 0.02).max(0.0);
+                            lobby.preview_map = Map::generate(lobby.seed, lobby.wall_density);
+                        }
+                        3 => { lobby.move_interval = (lobby.move_interval + 0.02).min(0.35); }
+                        _ => {}
+                    }
+                }
+                if is_key_pressed(KeyCode::Right) {
+                    match lobby.selected {
+                        2 => {
+                            lobby.wall_density = (lobby.wall_density + 0.02).min(0.35);
+                            lobby.preview_map = Map::generate(lobby.seed, lobby.wall_density);
+                        }
+                        3 => { lobby.move_interval = (lobby.move_interval - 0.02).max(0.05); }
+                        _ => {}
+                    }
+                }
+
                 if is_key_pressed(KeyCode::R) {
-                    // simple new seed
-                    lobby.seed = lobby.seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    lobby.seed = lobby
+                        .seed
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1);
+                    lobby.preview_map = Map::generate(lobby.seed, lobby.wall_density);
                 }
                 if is_key_pressed(KeyCode::Minus) {
                     lobby.wall_density = (lobby.wall_density - 0.02).max(0.0);
+                    lobby.preview_map = Map::generate(lobby.seed, lobby.wall_density);
                 }
                 if is_key_pressed(KeyCode::Equal) {
                     lobby.wall_density = (lobby.wall_density + 0.02).min(0.35);
+                    lobby.preview_map = Map::generate(lobby.seed, lobby.wall_density);
                 }
                 if is_key_pressed(KeyCode::LeftBracket) {
                     lobby.move_interval = (lobby.move_interval + 0.02).min(0.35);
@@ -491,16 +677,80 @@ async fn main() {
                     lobby.move_interval = (lobby.move_interval - 0.02).max(0.05);
                 }
 
+                if is_key_pressed(KeyCode::S) {
+                    next_screen = Some(Screen::Settings(SettingsState { sound_volume }));
+                }
+
                 if is_key_pressed(KeyCode::Enter) {
-                    let map = Map::generate(lobby.seed, lobby.wall_density);
-                    let game = SnakeGame::new(map, lobby.move_interval, eat_sound.clone(), die_sound.clone());
-                    // save last params
+                    match lobby.selected {
+                        0 => {
+                            let map = Map::generate(lobby.seed, lobby.wall_density);
+                            let game = SnakeGame::new(
+                                map,
+                                lobby.move_interval,
+                                eat_sound.clone(),
+                                die_sound.clone(),
+                                sound_volume,
+                            );
+                            let mut s = load_save();
+                            s.last_seed = lobby.seed;
+                            s.last_wall_density = lobby.wall_density;
+                            s.last_move_interval = lobby.move_interval;
+                            write_save(&s);
+                            next_screen = Some(Screen::Playing(game));
+                        }
+                        1 => {
+                            lobby.seed = lobby.seed
+                                .wrapping_mul(6364136223846793005)
+                                .wrapping_add(1);
+                        }
+                        4 => {
+                            std::process::exit(0);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            Screen::Settings(settings) => {
+                let sw = screen_width();
+                let sh = screen_height();
+
+                let title = "SETTINGS";
+                let t = measure_text(title, None, 36, 1.0);
+                let mut y = sh * 0.25;
+                draw_text(title, (sw - t.width) * 0.5, y, 36.0, MATRIX_HEAD);
+                y += 56.0;
+
+                let vol_line = format!("Volume: {:>3}%", (settings.sound_volume * 100.0).round() as i32);
+                let mv = measure_text(&vol_line, None, 22, 1.0);
+                draw_text(&vol_line, (sw - mv.width) * 0.5, y, 22.0, WHITE);
+                y += 28.0;
+
+                let hint1 = "Left/Right or -/+ : Adjust volume   M: Mute/Unmute";
+                let mh1 = measure_text(hint1, None, 18, 1.0);
+                draw_text(hint1, (sw - mh1.width) * 0.5, y, 18.0, GRAY);
+                y += 24.0;
+
+                let hint2 = "Enter/Esc: Back";
+                let mh2 = measure_text(hint2, None, 18, 1.0);
+                draw_text(hint2, (sw - mh2.width) * 0.5, y, 18.0, GRAY);
+
+                if is_key_pressed(KeyCode::Left) || is_key_pressed(KeyCode::Minus) {
+                    settings.sound_volume = (settings.sound_volume - 0.05).max(0.0);
+                }
+                if is_key_pressed(KeyCode::Right) || is_key_pressed(KeyCode::Equal) {
+                    settings.sound_volume = (settings.sound_volume + 0.05).min(1.0);
+                }
+                if is_key_pressed(KeyCode::M) {
+                    settings.sound_volume = if settings.sound_volume > 0.0 { 0.0 } else { 1.0 };
+                }
+                if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Escape) {
+                    sound_volume = settings.sound_volume;
                     let mut s = load_save();
-                    s.last_seed = lobby.seed;
-                    s.last_wall_density = lobby.wall_density;
-                    s.last_move_interval = lobby.move_interval;
+                    s.sound_volume = sound_volume;
                     write_save(&s);
-                    screen = Screen::Playing(game);
+                    next_screen = Some(Screen::Lobby(LobbyState::new()));
                 }
             }
 
@@ -511,24 +761,32 @@ async fn main() {
 
                 if !game.alive {
                     // Move into GameOver by cloning minimal state
-                    screen = Screen::GameOver(SnakeGame { map: game.map.clone(), ..game.clone_for_game_over() });
+                    next_screen = Some(Screen::GameOver(SnakeGame { map: game.map.clone(), ..game.clone_for_game_over() }));
                 }
             }
 
             Screen::GameOver(game) => {
                 game.draw();
                 // Overlay
-                draw_rectangle(0.0, 0.0, SCREEN_WIDTH as f32, SCREEN_HEIGHT as f32, Color::new(0.0, 0.0, 0.0, 0.4));
-                draw_text("GAME OVER", 70.0, 100.0, 36.0, MATRIX_HEAD);
-                draw_text("R: Restart  Enter: Lobby", 60.0, 130.0, 22.0, WHITE);
+                draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.0, 0.4));
+                let sw = screen_width();
+                let sh = screen_height();
+                let title = "GAME OVER";
+                let tm = measure_text(title, None, 36, 1.0);
+                draw_text(title, (sw - tm.width) * 0.5, sh * 0.4, 36.0, MATRIX_HEAD);
+                let hint = "R: Restart  Enter: Lobby  Q: Quit";
+                let hm = measure_text(hint, None, 22, 1.0);
+                draw_text(hint, (sw - hm.width) * 0.5, sh * 0.4 + 36.0 + 20.0, 22.0, WHITE);
                 // Save best
                 let mut s = load_save();
                 if game.score > s.best_score { s.best_score = game.score; write_save(&s); }
 
-                if is_key_pressed(KeyCode::R) { game.restart(); let map = game.map.clone(); let speed = game.move_interval; screen = Screen::Playing(SnakeGame::new(map, speed, game.eat_sound.clone(), game.die_sound.clone())); }
-                if is_key_pressed(KeyCode::Enter) { screen = Screen::Lobby(LobbyState::new()); }
+                if is_key_pressed(KeyCode::R) { game.restart(); let map = game.map.clone(); let speed = game.move_interval; next_screen = Some(Screen::Playing(SnakeGame::new(map, speed, game.eat_sound.clone(), game.die_sound.clone(), sound_volume))); }
+                if is_key_pressed(KeyCode::Enter) { next_screen = Some(Screen::Lobby(LobbyState::new())); }
             }
         }
+
+        if let Some(ns) = next_screen { screen = ns; }
 
         next_frame().await;
     }

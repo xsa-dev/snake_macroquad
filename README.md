@@ -17,36 +17,60 @@ A retro-style Snake game built with Rust and Macroquad, featuring a Matrix-inspi
 - **Dynamic glyph rendering** using Matrix-style characters (0, 1, <, >, [, ], etc.)
 - **Animated Matrix rain background** for immersive atmosphere
 - **Responsive scaling** that adapts to different screen sizes
+- **Fullscreen mode** with high DPI support for immersive gameplay
+- **Adaptive UI** with centered text and dynamic scaling for all screen resolutions
+- **Map preview in lobby** with animated snake demo showing current difficulty settings
 
 ### 🔊 Audio
 - **Procedurally generated sound effects** using WAV synthesis
 - **Eat sound** (880Hz tone) when consuming food
 - **Death sound** (110Hz tone) when game ends
+- **Adjustable volume** with dedicated settings screen
+- **Persistent volume settings** saved across game sessions
 
 ### 💾 Data Persistence
 - **Save system** using JSON for game settings and high scores
 - **Persistent configuration** of last used seed, wall density, and speed
 - **Best score tracking** across game sessions
+- **Sound volume persistence** with automatic restoration on launch
 
 ## Controls
+
+### Global
+- **Q** - Quit the game (from any screen)
 
 ### In-Game
 - **Arrow Keys** or **WASD** - Move the snake
 - **R** - Restart game (when game over)
 
 ### In Lobby
-- **Enter** - Start new game
+- **Enter** - Start new game (when "Start" is selected)
+- **↑ / ↓** - Navigate menu items
+- **← / →** - Adjust selected setting (wall density or speed)
 - **R** - Generate new random seed
 - **- / +** - Decrease/Increase wall density (0-35%)
 - **[ / ]** - Decrease/Increase game speed (50-350ms)
+- **S** - Open settings screen
+
+### In Settings
+- **← / →** or **- / +** - Adjust sound volume (0-100%)
+- **M** - Toggle mute/unmute
+- **Enter** or **Esc** - Return to lobby
+
+### Game Over
+- **R** - Restart game with same settings
+- **Enter** - Return to lobby
+- **Q** - Quit game
 
 ## Technical Details
 
 ### Architecture
-- **State-based design** with three main screens: Lobby, Playing, GameOver
+- **State-based design** with four main screens: Lobby, Settings, Playing, GameOver
 - **Modular components** for map generation, snake logic, and rendering
 - **Efficient collision detection** using HashSet for wall positions
 - **Deterministic map generation** using seeded random number generation
+- **Dynamic screen management** with smooth transitions between states
+- **Adaptive rendering** using screen dimensions for multi-resolution support
 
 ### Performance
 - **60 FPS target** with smooth frame timing
@@ -94,6 +118,12 @@ cargo build --release
 - **Move interval** controls snake speed (50-350ms)
 - **Grid size** is fixed at 32x24 tiles
 - **Tile size** scales with screen resolution
+- **Sound volume** adjustable from 0-100% (persisted across sessions)
+
+### Display Settings
+- **Fullscreen mode** enabled by default
+- **High DPI support** for crisp rendering on high-resolution displays
+- **Adaptive scaling** ensures proper display on any screen size
 
 ## File Structure
 
@@ -106,6 +136,7 @@ snake_macroquad/
 ├── Cargo.toml           # Project dependencies
 ├── Cargo.lock           # Dependency lock file
 ├── snake_save.json      # Persistent save data (auto-generated)
+├── CHANGELOG.md         # Project changelog
 └── README.md            # This file
 ```
 
