@@ -1,6 +1,7 @@
 {
-  "best_score": 13,
-  "last_seed": 12503,
-  "last_wall_density": 0.02,
-  "last_move_interval": 0.34000003
+  "best_score": 0,
+  "last_seed": 855,
+  "last_wall_density": 0.120000005,
+  "last_move_interval": 0.08,
+  "sound_volume": 0.95
 }
